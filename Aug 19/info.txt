@@ -1,1 +1,125 @@
+import os
+from typing import List
+from pydantic import BaseModel, Field
 
+from crewai import Agent, Crew, Process, Task
+from crewai_tools import ScrapeWebsiteTool, SerperDevTool
+
+# ==============================================================================
+# 1. STRUCTURED OUTPUT SCHEMAS (Pydantic V2 Compatible)
+# ==============================================================================
+class CompetitorInfo(BaseModel):
+    name: str = Field(..., description="Name of the competitor")
+    positioning: str = Field(..., description="Key positioning and market differentiation")
+
+class ResearchBrief(BaseModel):
+    company_name: str
+    industry: str
+    latest_revenue: str = Field(..., description="Recent revenue numbers with period")
+    net_profit_or_margin: str = Field(..., description="Net income, EPS, or margins")
+    top_competitors: List[CompetitorInfo] = Field(..., max_length=3)  # Updated to max_length
+    recent_catalysts: List[str] = Field(..., description="Recent news or market catalysts affecting stock price")
+    analyst_consensus: str = Field(..., description="Consensus rating (e.g., Strong Buy, Hold)")
+    sources: List[str] = Field(..., description="Verifiable URLs for all cited data points")
+
+
+# ==============================================================================
+# 2. AGENT DEFINITIONS
+# ==============================================================================
+researcher = Agent(
+    role="Senior Equity Research Analyst",
+    goal="Extract and cross-verify key financial figures, competitive dynamics, and consensus ratings for {company_name}.",
+    backstory=(
+        "You are a seasoned CFA Charterholder with 12+ years at institutional equity desks. "
+        "You reject speculation, cross-examine primary filings (10-K/10-Q) and financial databases, "
+        "and maintain strict source attribution for every metric."
+    ),
+    llm=llm,
+    tools=[SerperDevTool(), ScrapeWebsiteTool()],
+    verbose=True,
+    allow_delegation=False,
+    max_iter=5,
+    max_rpm=30,
+)
+
+report_writer = Agent(
+    role="Principal Financial Communications Writer",
+    goal="Synthesize raw equity research into an institutional-grade, single-page executive investment memo.",
+    backstory=(
+        "Former editorial lead at Wall Street Journal and Bloomberg Intelligence. "
+        "You adhere strictly to Barbara Minto's Pyramid Principle: lead with the core thesis, "
+        "support with structured data, and highlight downside tail risks with precision."
+    ),
+    llm=llm,
+    verbose=True,
+    allow_delegation=False,
+    max_iter=3,
+)
+
+
+# ==============================================================================
+# 3. TASK DEFINITIONS
+# ==============================================================================
+research_task = Task(
+    description=(
+        "Conduct a comprehensive fundamental check on {company_name} within the {industry} sector.\n"
+        "Collect and verify:\n"
+        "1. Trailing Twelve Months (TTM) and most recent quarter revenue/profit.\n"
+        "2. Top 3 primary competitors and their direct strategic positioning.\n"
+        "3. Top 2-3 material market catalysts impacting valuation over the last 90 days.\n"
+        "4. Current Wall Street analyst consensus rating and average price target.\n\n"
+        "Mandatory: Every factual claim must have a valid source link."
+    ),
+    expected_output="A structured ResearchBrief data object containing cited metrics.",
+    output_pydantic=ResearchBrief,
+    agent=researcher,
+)
+
+writing_task = Task(
+    description=(
+        "Using the verified ResearchBrief from the prior task, write a high-impact, "
+        "one-page investment memo on {company_name}.\n\n"
+        "Required Markdown Sections:\n"
+        "# Investment Memo: {company_name}\n"
+        "## 1. Executive Thesis (Max 2 sentences: bottom-line call & key driver)\n"
+        "## 2. Company & Market Positioning (1 structured paragraph)\n"
+        "## 3. Financial Performance & Valuation Summary (Markdown table or key metrics)\n"
+        "## 4. Competitive Dynamics (3 concise bullets)\n"
+        "## 5. Key Downside Risks (3 high-impact risk factors)\n"
+        "## 6. Strategic Recommendation (1 actionable concluding paragraph)\n\n"
+        "Apply professional financial tone: crisp, data-backed, zero generic filler."
+    ),
+    expected_output="An executive-ready investment memo formatted in standard Markdown.",
+    agent=report_writer,
+    context=[research_task],
+    output_file="investment_memo.md",
+)
+
+
+# ==============================================================================
+# 4. CREW PIPELINE SETUP
+# ==============================================================================
+investment_crew = Crew(
+    agents=[researcher, report_writer],
+    tasks=[research_task, writing_task],
+    process=Process.sequential,
+    memory=False,
+    verbose=True,
+)
+
+
+# ==============================================================================
+# 5. NOTEBOOK EXECUTION
+# ==============================================================================
+inputs = {
+    "company_name": "NVIDIA",
+    "industry": "Semiconductors & Accelerated AI Infrastructure",
+}
+
+print("\n🚀 Kickoff: Generating Investment Memo...\n")
+result = await investment_crew.kickoff_async(inputs=inputs)
+
+print("\n" + "=" * 60)
+print("INVESTMENT MEMO COMPLETED")
+print("=" * 60)
+print(result.raw)
